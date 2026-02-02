@@ -7,32 +7,64 @@ const dotenv = require("dotenv");
 
 dotenv.config();
 
-// ==================== 1. SEED ADMIN DATA ====================
-/**
- * Create seed admin (One-time setup)
- * Only works if no admin exists in database
- */
-router.post("/seed", async (req, res) => {
+// ==================== 1. CHECK IF ADMIN EXISTS ====================
+router.get("/check/exists", async (req, res) => {
   try {
-    // Check if any admin already exists
-    const existingAdmin = await Admin.findOne();
-    if (existingAdmin) {
-      return res.status(400).json({
-        message: "Admin already exists. Use login or forget password instead.",
-        existingAdminEmail: existingAdmin.email,
+    const admin = await Admin.findOne().select("email createdAt");
+
+    if (!admin) {
+      return res.status(200).json({
+        success: true,
+        exists: false,
+        message: "No admin account found.",
       });
     }
 
-    // Default seed credentials (can be customized via env or request body)
-    const defaultEmail = process.env.DEFAULT_ADMIN_EMAIL || "admin@example.com";
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || "Admin@123";
+    return res.status(200).json({
+      success: true,
+      exists: true,
+      admin: {
+        email: admin.email,
+        createdAt: admin.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Check admin error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check admin status",
+      error: error.message,
+    });
+  }
+});
 
-    const { email = defaultEmail, password = defaultPassword } = req.body;
+// ==================== 2. REGISTER ADMIN (Always allowed) ====================
+router.post("/register", async (req, res) => {
+  try {
+    const { email, password } = req.body;
 
+    // Validation
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Email and password are required" });
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    // Check if admin with this email already exists
+    const existingAdmin = await Admin.findOne({ email: email.toLowerCase() });
+    if (existingAdmin) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin with this email already exists",
+      });
     }
 
     // Hash the password
@@ -40,7 +72,7 @@ router.post("/seed", async (req, res) => {
 
     // Create the admin
     const admin = new Admin({
-      email: email,
+      email: email.toLowerCase(),
       password: hashedPassword,
     });
 
@@ -48,27 +80,24 @@ router.post("/seed", async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Seed admin created successfully",
-      data: {
+      message: "Admin registered successfully",
+      admin: {
         id: admin._id,
         email: admin.email,
-        note: "Please save these credentials securely. You can now login.",
+        createdAt: admin.createdAt,
       },
     });
   } catch (error) {
-    console.error("Seed admin error:", error);
+    console.error("Register error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to create seed admin",
+      message: "Failed to register admin",
       error: error.message,
     });
   }
 });
 
-// ==================== 2. ADMIN LOGIN ====================
-/**
- * Login existing admin
- */
+// ==================== 3. ADMIN LOGIN ====================
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -87,8 +116,7 @@ router.post("/login", async (req, res) => {
     if (!admin) {
       return res.status(404).json({
         success: false,
-        message:
-          "Admin not found. Check your email or create seed admin first.",
+        message: "Admin not found",
       });
     }
 
@@ -121,11 +149,7 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ==================== 3. FORGET PASSWORD ====================
-/**
- * Step 1: Verify admin email (no token needed)
- * This verifies the admin exists and prepares for password reset
- */
+// ==================== 4. FORGET PASSWORD ====================
 router.post("/forget-password", async (req, res) => {
   try {
     const { email } = req.body;
@@ -147,16 +171,11 @@ router.post("/forget-password", async (req, res) => {
       });
     }
 
-    // Email verification successful
-    // In a real app, you would send an email here
-    // For simplicity, we just return success
     return res.status(200).json({
       success: true,
-      message: "Email verified successfully. You can now reset your password.",
+      message: "Email verified successfully",
       adminId: admin._id,
       email: admin.email,
-      instructions:
-        "Use the reset-password endpoint with admin ID and new password",
     });
   } catch (error) {
     console.error("Forget password error:", error);
@@ -168,11 +187,7 @@ router.post("/forget-password", async (req, res) => {
   }
 });
 
-// ==================== 4. RESET PASSWORD ====================
-/**
- * Step 2: Reset password after email verification
- * Requires admin ID and new password
- */
+// ==================== 5. RESET PASSWORD ====================
 router.post("/reset-password", async (req, res) => {
   try {
     const { adminId, newPassword } = req.body;
@@ -214,9 +229,7 @@ router.post("/reset-password", async (req, res) => {
       admin: {
         id: admin._id,
         email: admin.email,
-        updatedAt: admin.updatedAt,
       },
-      note: "You can now login with your new password",
     });
   } catch (error) {
     console.error("Reset password error:", error);
@@ -228,11 +241,7 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
-// ==================== 5. UPDATE ADMIN CREDENTIALS ====================
-/**
- * Update admin email and/or password
- * Requires admin ID and current password for security
- */
+// ==================== 6. UPDATE ADMIN ====================
 router.put("/update/:id", async (req, res) => {
   try {
     const adminId = req.params.id;
@@ -328,10 +337,27 @@ router.put("/update/:id", async (req, res) => {
   }
 });
 
-// ==================== 6. GET ADMIN INFO ====================
-/**
- * Get admin information (excluding password)
- */
+// ==================== 7. GET ALL ADMINS ====================
+router.get("/", async (req, res) => {
+  try {
+    const admins = await Admin.find().select("-password");
+
+    return res.status(200).json({
+      success: true,
+      count: admins.length,
+      admins: admins,
+    });
+  } catch (error) {
+    console.error("Get admins error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get admins",
+      error: error.message,
+    });
+  }
+});
+
+// ==================== 8. GET SINGLE ADMIN ====================
 router.get("/:id", async (req, res) => {
   try {
     const admin = await Admin.findById(req.params.id).select("-password");
@@ -357,35 +383,82 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// ==================== 7. CHECK IF ADMIN EXISTS ====================
-/**
- * Check if admin account exists
- */
-router.get("/check/exists", async (req, res) => {
+// ==================== 9. DELETE ADMIN ====================
+router.delete("/:id", async (req, res) => {
   try {
-    const admin = await Admin.findOne().select("email createdAt");
+    const admin = await Admin.findByIdAndDelete(req.params.id);
 
     if (!admin) {
-      return res.status(200).json({
-        success: true,
-        exists: false,
-        message: "No admin account found. Use seed endpoint to create one.",
+      return res.status(404).json({
+        success: false,
+        message: "Admin not found",
       });
     }
 
     return res.status(200).json({
       success: true,
-      exists: true,
+      message: "Admin deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete admin error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete admin",
+      error: error.message,
+    });
+  }
+});
+
+// ==================== 10. SEED ADMIN (Legacy - One-time) ====================
+router.post("/seed", async (req, res) => {
+  try {
+    // Check if any admin already exists
+    const existingAdmin = await Admin.findOne();
+    if (existingAdmin) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin already exists. Please use login or register.",
+        existingAdminEmail: existingAdmin.email,
+      });
+    }
+
+    // Default seed credentials
+    const defaultEmail = process.env.DEFAULT_ADMIN_EMAIL || "admin@example.com";
+    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || "Admin@123";
+
+    const { email = defaultEmail, password = defaultPassword } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
+    }
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create the admin
+    const admin = new Admin({
+      email: email.toLowerCase(),
+      password: hashedPassword,
+    });
+
+    await admin.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Seed admin created successfully",
       admin: {
+        id: admin._id,
         email: admin.email,
-        createdAt: admin.createdAt,
       },
     });
   } catch (error) {
-    console.error("Check admin error:", error);
+    console.error("Seed admin error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to check admin status",
+      message: "Failed to create seed admin",
       error: error.message,
     });
   }
